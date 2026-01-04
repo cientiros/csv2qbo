@@ -23,32 +23,38 @@
             date: '',
             description: '',
             amount: '',
+            creditDebitIndicator: '',
             type: 'auto'
           });
-          const [accountName, setAccountName] = useState('Bank Account');
-          const [bankId, setBankId] = useState('');
-          const [customBankIdValue, setCustomBankIdValue] = useState('');
+          const [accountId, setAccountId] = useState('');
+          const [selectedBank, setSelectedBank] = useState('');
+          const [customBankId, setCustomBankId] = useState('');
+          const [customRoutingNumber, setCustomRoutingNumber] = useState('');
+          const [customOrgName, setCustomOrgName] = useState('');
           const [error, setError] = useState('');
+          const [success, setSuccess] = useState('');
           const [loading, setLoading] = useState(false);
 
-          const commonBanks = [
-            { name: 'Generic/Universal (Recommended - Works with most QB versions)', id: '3000' },
-            { name: 'Wells Fargo', id: '3000' },
-            { name: 'Chase', id: '1089' },
-            { name: 'Bank of America', id: '5959' },
-            { name: 'Citibank', id: '7001' },
-            { name: 'U.S. Bank', id: '4265' },
-            { name: 'PNC Bank', id: '6214' },
-            { name: 'Capital One', id: '4001' },
-            { name: 'TD Bank', id: '5151' },
-            { name: 'Truist Bank', id: '6262' },
-            { name: 'Charles Schwab', id: '6214' },
-            { name: 'Ally Bank', id: '1028' },
-            { name: 'Discover Bank', id: '7101' },
-            { name: 'USAA', id: '3912' },
-            { name: 'Navy Federal', id: '2561' },
-            { name: 'American Express', id: '3101' },
-            { name: 'Custom/Other', id: 'custom' }
+          // Bank configurations with correct INTU.BID and routing numbers
+          const bankConfigs = [
+            { name: 'Select your bank...', id: '', routing: '', org: '' },
+            { name: 'Navy Federal Credit Union', id: '14545', routing: '256074974', org: 'NFCU' },
+            { name: 'Wells Fargo', id: '3000', routing: '121000248', org: 'Wells Fargo' },
+            { name: 'Chase', id: '1089', routing: '021000021', org: 'Chase' },
+            { name: 'Bank of America', id: '5959', routing: '026009593', org: 'Bank of America' },
+            { name: 'Citibank', id: '7001', routing: '021000089', org: 'Citibank' },
+            { name: 'U.S. Bank', id: '4265', routing: '122105155', org: 'US Bank' },
+            { name: 'PNC Bank', id: '6214', routing: '043000096', org: 'PNC Bank' },
+            { name: 'Capital One', id: '4001', routing: '056073502', org: 'Capital One' },
+            { name: 'TD Bank', id: '5151', routing: '031101266', org: 'TD Bank' },
+            { name: 'Truist Bank', id: '6262', routing: '061000104', org: 'Truist' },
+            { name: 'Charles Schwab', id: '6214', routing: '121202211', org: 'Charles Schwab' },
+            { name: 'Ally Bank', id: '1028', routing: '124003116', org: 'Ally Bank' },
+            { name: 'Discover Bank', id: '7101', routing: '031100649', org: 'Discover' },
+            { name: 'USAA', id: '3912', routing: '314074269', org: 'USAA' },
+            { name: 'American Express', id: '3101', routing: '124085066', org: 'American Express' },
+            { name: 'Generic/Universal', id: '3000', routing: '000000000', org: 'Bank' },
+            { name: 'Custom/Other', id: 'custom', routing: '', org: '' }
           ];
 
           const handleFileUpload = (e) => {
@@ -57,15 +63,13 @@
 
             setLoading(true);
             setError('');
-            console.log('File selected:', file.name);
+            setSuccess('');
 
             Papa.parse(file, {
               header: true,
               skipEmptyLines: true,
               dynamicTyping: false,
               complete: (results) => {
-                console.log('Parse complete:', results);
-                
                 if (!results.data || results.data.length === 0) {
                   setError('CSV file is empty or could not be parsed');
                   setLoading(false);
@@ -80,16 +84,23 @@
                 }
                 
                 const cleanHeaders = Object.keys(firstRow).map(h => String(h).trim()).filter(h => h);
-                console.log('Headers found:', cleanHeaders);
                 
+                // Auto-detect columns
                 const dateCol = cleanHeaders.find(h => 
-                  /date|posted|transaction.*date/i.test(h)
-                );
+                  /^(posting.?date|date|posted|transaction.?date)$/i.test(h)
+                ) || cleanHeaders.find(h => /date/i.test(h));
+                
                 const descCol = cleanHeaders.find(h => 
-                  /desc|description|memo|payee|name/i.test(h)
-                );
+                  /^(description|desc|memo|payee|name)$/i.test(h)
+                ) || cleanHeaders.find(h => /desc|memo/i.test(h));
+                
                 const amountCol = cleanHeaders.find(h => 
-                  /amount|value|total/i.test(h)
+                  /^(amount|value|total)$/i.test(h)
+                ) || cleanHeaders.find(h => /amount/i.test(h));
+                
+                // Auto-detect credit/debit indicator column
+                const creditDebitCol = cleanHeaders.find(h => 
+                  /credit.?debit|debit.?credit|indicator|type/i.test(h)
                 );
                 
                 setTimeout(() => {
@@ -99,13 +110,13 @@
                     date: dateCol || '',
                     description: descCol || '',
                     amount: amountCol || '',
+                    creditDebitIndicator: creditDebitCol || '',
                     type: 'auto'
                   });
                   setLoading(false);
                 }, 0);
               },
               error: (err) => {
-                console.error('Parse error:', err);
                 setError(`Error parsing CSV: ${err.message}`);
                 setLoading(false);
               }
@@ -116,11 +127,24 @@
             if (!dateStr) return null;
             
             const cleaned = String(dateStr).trim();
-            const date = new Date(cleaned);
             
-            if (isNaN(date.getTime())) {
-              return null;
+            // Try MM/DD/YYYY format first
+            const mdyMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (mdyMatch) {
+              const [, month, day, year] = mdyMatch;
+              return `${year}${month.padStart(2, '0')}${day.padStart(2, '0')}`;
             }
+            
+            // Try YYYY-MM-DD format
+            const ymdMatch = cleaned.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+            if (ymdMatch) {
+              const [, year, month, day] = ymdMatch;
+              return `${year}${month.padStart(2, '0')}${day.padStart(2, '0')}`;
+            }
+            
+            // Fallback to Date parsing
+            const date = new Date(cleaned);
+            if (isNaN(date.getTime())) return null;
             
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -139,133 +163,166 @@
             return Math.abs(hash).toString(16).padStart(32, '0');
           };
 
+          const escapeXml = (str) => {
+            return String(str || '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&apos;');
+          };
+
           const generateQBO = () => {
             if (!csvData || !mapping.date || !mapping.description || !mapping.amount) {
-              setError('Please map all required fields');
+              setError('Please map all required fields (Date, Description, Amount)');
               return;
             }
 
-            const finalBankId = bankId === 'custom' ? customBankIdValue : bankId;
+            const bankConfig = bankConfigs.find(b => b.id === selectedBank);
             
-            if (!finalBankId || finalBankId === 'custom') {
-              setError('Please select a bank or enter a custom Bank ID');
+            let finalBankId, finalRouting, finalOrg;
+            
+            if (selectedBank === 'custom') {
+              finalBankId = customBankId;
+              finalRouting = customRoutingNumber;
+              finalOrg = customOrgName || 'Bank';
+            } else if (bankConfig && bankConfig.id) {
+              finalBankId = bankConfig.id;
+              finalRouting = bankConfig.routing;
+              finalOrg = bankConfig.org;
+            } else {
+              setError('Please select a bank');
               return;
             }
 
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = String(today.getMonth() + 1).padStart(2, '0');
-            const day = String(today.getDate()).padStart(2, '0');
-            const hours = String(today.getHours()).padStart(2, '0');
-            const minutes = String(today.getMinutes()).padStart(2, '0');
-            const seconds = String(today.getSeconds()).padStart(2, '0');
-            const millis = String(today.getMilliseconds()).padStart(3, '0');
-            const dtServer = `${year}${month}${day}${hours}${minutes}${seconds}.${millis}`;
-            
-            let qboContent = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
-            qboContent += '<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>';
-            qboContent += '<OFX>';
-            qboContent += '<SIGNONMSGSRSV1>';
-            qboContent += '<SONRS>';
-            qboContent += '<STATUS>';
-            qboContent += '<CODE>0</CODE>';
-            qboContent += '<SEVERITY>INFO</SEVERITY>';
-            qboContent += '</STATUS>';
-            qboContent += `<DTSERVER>${dtServer}</DTSERVER>`;
-            qboContent += '<LANGUAGE>ENG</LANGUAGE>';
-            qboContent += '<FI>';
-            qboContent += '<ORG>Bank</ORG>';
-            qboContent += '<FID>1001</FID>';
-            qboContent += '</FI>';
-            qboContent += `<INTU.BID>${finalBankId}</INTU.BID>`;
-            qboContent += '</SONRS>';
-            qboContent += '</SIGNONMSGSRSV1>';
-            qboContent += '<BANKMSGSRSV1>';
-            qboContent += '<STMTTRNRS>';
-            qboContent += '<TRNUID>0</TRNUID>';
-            qboContent += '<STATUS>';
-            qboContent += '<CODE>0</CODE>';
-            qboContent += '<SEVERITY>INFO</SEVERITY>';
-            qboContent += '</STATUS>';
-            qboContent += '<STMTRS>';
-            qboContent += '<CURDEF>USD</CURDEF>';
-            qboContent += '<BANKACCTFROM>';
-            qboContent += `<BANKID>${finalBankId}</BANKID>`;
-            qboContent += '<ACCTID>999999999</ACCTID>';
-            qboContent += '<ACCTTYPE>CHECKING</ACCTTYPE>';
-            qboContent += '</BANKACCTFROM>';
-            qboContent += '<BANKTRANLIST>';
-            
-            const firstDate = parseDate(csvData[0][mapping.date]) || '20240101';
-            const lastDate = parseDate(csvData[csvData.length - 1][mapping.date]) || year + month + day;
-            
-            qboContent += `<DTSTART>${firstDate}120000.000</DTSTART>`;
-            qboContent += `<DTEND>${lastDate}120000.000</DTEND>`;
+            if (!finalBankId || !finalRouting) {
+              setError('Please provide Bank ID and Routing Number');
+              return;
+            }
+
+            // Collect all valid dates to determine date range
+            const validDates = [];
+            csvData.forEach(row => {
+              const date = parseDate(row[mapping.date]);
+              if (date) validDates.push(date);
+            });
+
+            if (validDates.length === 0) {
+              setError('No valid dates found in the CSV');
+              return;
+            }
+
+            // Sort dates to get proper range (earliest to latest)
+            validDates.sort();
+            const startDate = validDates[0];
+            const endDate = validDates[validDates.length - 1];
+
+            const now = new Date();
+            const dtServer = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+
+            // Build QBO content
+            let qbo = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+            qbo += '<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>';
+            qbo += '<OFX>';
+            qbo += '<SIGNONMSGSRSV1>';
+            qbo += '<SONRS>';
+            qbo += '<STATUS><CODE>0</CODE><SEVERITY>INFO</SEVERITY></STATUS>';
+            qbo += `<DTSERVER>${dtServer}</DTSERVER>`;
+            qbo += '<LANGUAGE>ENG</LANGUAGE>';
+            qbo += '<FI>';
+            qbo += `<ORG>${escapeXml(finalOrg)}</ORG>`;
+            qbo += '<FID>1001</FID>';
+            qbo += '</FI>';
+            qbo += `<INTU.BID>${escapeXml(finalBankId)}</INTU.BID>`;
+            qbo += '</SONRS>';
+            qbo += '</SIGNONMSGSRSV1>';
+            qbo += '<BANKMSGSRSV1>';
+            qbo += '<STMTTRNRS>';
+            qbo += '<TRNUID>0</TRNUID>';
+            qbo += '<STATUS><CODE>0</CODE><SEVERITY>INFO</SEVERITY></STATUS>';
+            qbo += '<STMTRS>';
+            qbo += '<CURDEF>USD</CURDEF>';
+            qbo += '<BANKACCTFROM>';
+            qbo += `<BANKID>${escapeXml(finalRouting)}</BANKID>`;
+            qbo += `<ACCTID>${escapeXml(accountId || '999999999')}</ACCTID>`;
+            qbo += '<ACCTTYPE>CHECKING</ACCTTYPE>';
+            qbo += '</BANKACCTFROM>';
+            qbo += '<BANKTRANLIST>';
+            qbo += `<DTSTART>${startDate}120000.000</DTSTART>`;
+            qbo += `<DTEND>${endDate}120000.000</DTEND>`;
 
             let transactionCount = 0;
+            let creditCount = 0;
+            let debitCount = 0;
+
             csvData.forEach((row, idx) => {
               const date = parseDate(row[mapping.date]);
               if (!date) return;
               
-              let amount = String(row[mapping.amount] || '0')
-                .trim()
-                .replace(/[$,]/g, '');
+              // Parse amount - remove currency symbols and commas
+              let amountStr = String(row[mapping.amount] || '0').trim().replace(/[$,]/g, '');
               
-              const isNegative = amount.includes('(') || amount.startsWith('-');
-              amount = amount.replace(/[()]/g, '').replace(/-/g, '');
-              const numAmount = parseFloat(amount);
+              // Check for parentheses or minus sign indicating negative
+              const hasParens = amountStr.includes('(') && amountStr.includes(')');
+              const hasMinus = amountStr.startsWith('-');
+              amountStr = amountStr.replace(/[()]/g, '').replace(/^-/, '');
               
-              if (isNaN(numAmount)) return;
+              const numAmount = parseFloat(amountStr);
+              if (isNaN(numAmount) || numAmount === 0) return;
               
-              let finalAmount = numAmount;
-              let trnType = 'OTHER';
+              // Determine if this is a debit or credit
+              let isDebit = false;
               
-              if (mapping.type === 'auto') {
-                if (isNegative || numAmount < 0) {
-                  finalAmount = Math.abs(numAmount);
-                  trnType = 'DEBIT';
-                } else {
-                  trnType = 'CREDIT';
-                }
+              // First, check the Credit/Debit Indicator column if mapped
+              if (mapping.creditDebitIndicator && row[mapping.creditDebitIndicator]) {
+                const indicator = String(row[mapping.creditDebitIndicator]).trim().toLowerCase();
+                isDebit = indicator.includes('debit') || indicator === 'd';
+              } else if (hasParens || hasMinus) {
+                // Fallback: negative amounts are debits
+                isDebit = true;
               }
               
-              const description = String(row[mapping.description] || 'Transaction')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .substring(0, 255);
+              const trnType = isDebit ? 'DEBIT' : 'CREDIT';
+              const finalAmount = isDebit ? -Math.abs(numAmount) : Math.abs(numAmount);
               
-              const fitid = generateHash(date + idx + description + finalAmount);
+              if (isDebit) debitCount++;
+              else creditCount++;
+              
+              // Get description (truncate to 32 chars for NAME field like Navy Fed does)
+              const fullDesc = String(row[mapping.description] || 'Transaction').trim();
+              const shortName = fullDesc.substring(0, 32);
+              
+              // Generate unique FITID
+              const fitid = generateHash(`${date}${idx}${fullDesc}${numAmount}${Date.now()}`);
 
-              qboContent += '<STMTTRN>';
-              qboContent += `<TRNTYPE>${trnType}</TRNTYPE>`;
-              qboContent += `<DTPOSTED>${date}120000.000</DTPOSTED>`;
-              qboContent += `<TRNAMT>${trnType === 'DEBIT' ? '-' : ''}${finalAmount.toFixed(2)}</TRNAMT>`;
-              qboContent += `<FITID>${fitid}</FITID>`;
-              qboContent += `<NAME>${description}</NAME>`;
-              qboContent += `<MEMO>${description}</MEMO>`;
-              qboContent += '</STMTTRN>';
+              qbo += '<STMTTRN>';
+              qbo += `<TRNTYPE>${trnType}</TRNTYPE>`;
+              qbo += `<DTPOSTED>${date}120000.000</DTPOSTED>`;
+              qbo += `<TRNAMT>${finalAmount.toFixed(2)}</TRNAMT>`;
+              qbo += `<FITID>${fitid}</FITID>`;
+              qbo += `<NAME>${escapeXml(shortName)}</NAME>`;
+              qbo += `<MEMO>${escapeXml(fullDesc)}</MEMO>`;
+              qbo += '</STMTTRN>';
               
               transactionCount++;
             });
 
-            qboContent += '</BANKTRANLIST>';
-            qboContent += '<LEDGERBAL>';
-            qboContent += '<BALAMT>0.00</BALAMT>';
-            qboContent += `<DTASOF>${dtServer}</DTASOF>`;
-            qboContent += '</LEDGERBAL>';
-            qboContent += '<AVAILBAL>';
-            qboContent += '<BALAMT>0.00</BALAMT>';
-            qboContent += `<DTASOF>${dtServer}</DTASOF>`;
-            qboContent += '</AVAILBAL>';
-            qboContent += '</STMTRS>';
-            qboContent += '</STMTTRNRS>';
-            qboContent += '</BANKMSGSRSV1>';
-            qboContent += '</OFX>';
+            qbo += '</BANKTRANLIST>';
+            qbo += '<LEDGERBAL>';
+            qbo += '<BALAMT>0.00</BALAMT>';
+            qbo += `<DTASOF>${dtServer}</DTASOF>`;
+            qbo += '</LEDGERBAL>';
+            qbo += '<AVAILBAL>';
+            qbo += '<BALAMT>0.00</BALAMT>';
+            qbo += `<DTASOF>${dtServer}</DTASOF>`;
+            qbo += '</AVAILBAL>';
+            qbo += '</STMTRS>';
+            qbo += '</STMTTRNRS>';
+            qbo += '</BANKMSGSRSV1>';
+            qbo += '</OFX>';
 
-            console.log('Generated QBO with', transactionCount, 'transactions');
-
-            const blob = new Blob([qboContent], { type: 'application/vnd.intu.qbo' });
+            // Download the file
+            const blob = new Blob([qbo], { type: 'application/vnd.intu.qbo' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -276,17 +333,20 @@
             URL.revokeObjectURL(url);
             
             setError('');
+            setSuccess(`✓ Generated QBO with ${transactionCount} transactions (${creditCount} credits, ${debitCount} debits). Date range: ${startDate} to ${endDate}`);
           };
 
+          const selectedBankConfig = bankConfigs.find(b => b.id === selectedBank);
+
           return (
-            <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
+            <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 md:p-8">
               <div className="max-w-4xl mx-auto">
-                <div className="bg-white rounded-lg shadow-lg p-8">
+                <div className="bg-white rounded-lg shadow-lg p-6 md:p-8">
                   <div className="flex items-center gap-3 mb-6">
                     <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
-                    <h1 className="text-3xl font-bold text-gray-800">CSV to QBO Converter</h1>
+                    <h1 className="text-2xl md:text-3xl font-bold text-gray-800">CSV to QBO Converter</h1>
                   </div>
 
                   {error && (
@@ -298,15 +358,25 @@
                     </div>
                   )}
 
+                  {success && (
+                    <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
+                      <svg className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <p className="text-green-800">{success}</p>
+                    </div>
+                  )}
+
                   {loading && (
                     <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
                       <p className="text-blue-800">Processing CSV file...</p>
                     </div>
                   )}
 
-                  <div className="mb-8">
+                  {/* File Upload */}
+                  <div className="mb-6">
                     <label className="block mb-2 text-sm font-medium text-gray-700">
-                      Upload Bank CSV File
+                      1. Upload Bank CSV File
                     </label>
                     <div className="flex items-center justify-center w-full">
                       <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
@@ -326,113 +396,173 @@
 
                   {headers && headers.length > 0 && (
                     <div className="space-y-6">
-                      <div>
-                        <label className="block mb-2 text-sm font-medium text-gray-700">
-                          Select Your Bank *
-                        </label>
-                        <select
-                          value={bankId}
-                          onChange={(e) => setBankId(e.target.value)}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                        >
-                          <option value="">Select your bank...</option>
-                          {commonBanks.map(bank => (
-                            <option key={bank.id} value={bank.id}>
-                              {bank.name} {bank.id !== 'custom' && `(${bank.id})`}
-                            </option>
-                          ))}
-                        </select>
-                        {bankId === 'custom' && (
+                      {/* Bank Selection */}
+                      <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                        <h3 className="font-medium text-gray-800">2. Bank Information</h3>
+                        
+                        <div>
+                          <label className="block mb-2 text-sm font-medium text-gray-700">
+                            Select Your Bank *
+                          </label>
+                          <select
+                            value={selectedBank}
+                            onChange={(e) => setSelectedBank(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                          >
+                            {bankConfigs.map((bank, idx) => (
+                              <option key={idx} value={bank.id}>
+                                {bank.name} {bank.id && bank.id !== 'custom' && `(BID: ${bank.id})`}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {selectedBank === 'custom' && (
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                              <label className="block mb-1 text-sm text-gray-600">Bank ID (INTU.BID) *</label>
+                              <input
+                                type="text"
+                                placeholder="e.g., 14545"
+                                value={customBankId}
+                                onChange={(e) => setCustomBankId(e.target.value)}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block mb-1 text-sm text-gray-600">Routing Number *</label>
+                              <input
+                                type="text"
+                                placeholder="e.g., 256074974"
+                                value={customRoutingNumber}
+                                onChange={(e) => setCustomRoutingNumber(e.target.value)}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                            <div>
+                              <label className="block mb-1 text-sm text-gray-600">Organization Name</label>
+                              <input
+                                type="text"
+                                placeholder="e.g., NFCU"
+                                value={customOrgName}
+                                onChange={(e) => setCustomOrgName(e.target.value)}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {selectedBankConfig && selectedBankConfig.routing && selectedBank !== 'custom' && (
+                          <div className="text-sm text-gray-600 bg-white p-3 rounded border">
+                            <strong>Bank Details:</strong> BID: {selectedBankConfig.id}, Routing: {selectedBankConfig.routing}, Org: {selectedBankConfig.org}
+                          </div>
+                        )}
+
+                        <div>
+                          <label className="block mb-1 text-sm text-gray-600">Account Number (optional)</label>
                           <input
                             type="text"
-                            placeholder="Enter Bank ID (e.g., 1234)"
-                            value={customBankIdValue}
-                            onChange={(e) => setCustomBankIdValue(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent mt-2"
+                            placeholder="Your account number (or leave blank for default)"
+                            value={accountId}
+                            onChange={(e) => setAccountId(e.target.value)}
+                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
                           />
-                        )}
-                        <p className="text-xs text-gray-500 mt-2">
-                          💡 <strong>Tip:</strong> If you get a "Unable to verify financial institution" error in QuickBooks, 
-                          try using "Generic/Universal (3000)" - it's the most compatible with all QB versions.
-                        </p>
-                      </div>
-
-                      <div>
-                        <label className="block mb-2 text-sm font-medium text-gray-700">
-                          Account Name (optional)
-                        </label>
-                        <input
-                          type="text"
-                          value={accountName}
-                          onChange={(e) => setAccountName(e.target.value)}
-                          className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          placeholder="e.g., Checking Account"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-700">
-                            Date Column *
-                          </label>
-                          <select
-                            value={mapping.date}
-                            onChange={(e) => setMapping({...mapping, date: e.target.value})}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          >
-                            <option value="">Select column...</option>
-                            {headers.map(h => (
-                              <option key={h} value={h}>{h}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-700">
-                            Description Column *
-                          </label>
-                          <select
-                            value={mapping.description}
-                            onChange={(e) => setMapping({...mapping, description: e.target.value})}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          >
-                            <option value="">Select column...</option>
-                            {headers.map(h => (
-                              <option key={h} value={h}>{h}</option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-700">
-                            Amount Column *
-                          </label>
-                          <select
-                            value={mapping.amount}
-                            onChange={(e) => setMapping({...mapping, amount: e.target.value})}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          >
-                            <option value="">Select column...</option>
-                            {headers.map(h => (
-                              <option key={h} value={h}>{h}</option>
-                            ))}
-                          </select>
                         </div>
                       </div>
 
+                      {/* Column Mapping */}
+                      <div className="p-4 bg-gray-50 rounded-lg space-y-4">
+                        <h3 className="font-medium text-gray-800">3. Map CSV Columns</h3>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block mb-2 text-sm font-medium text-gray-700">
+                              Date Column *
+                            </label>
+                            <select
+                              value={mapping.date}
+                              onChange={(e) => setMapping({...mapping, date: e.target.value})}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                            >
+                              <option value="">Select column...</option>
+                              {headers.map(h => (
+                                <option key={h} value={h}>{h}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block mb-2 text-sm font-medium text-gray-700">
+                              Description Column *
+                            </label>
+                            <select
+                              value={mapping.description}
+                              onChange={(e) => setMapping({...mapping, description: e.target.value})}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                            >
+                              <option value="">Select column...</option>
+                              {headers.map(h => (
+                                <option key={h} value={h}>{h}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block mb-2 text-sm font-medium text-gray-700">
+                              Amount Column *
+                            </label>
+                            <select
+                              value={mapping.amount}
+                              onChange={(e) => setMapping({...mapping, amount: e.target.value})}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                            >
+                              <option value="">Select column...</option>
+                              {headers.map(h => (
+                                <option key={h} value={h}>{h}</option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block mb-2 text-sm font-medium text-gray-700">
+                              Credit/Debit Indicator Column
+                              <span className="text-xs text-gray-500 ml-1">(recommended)</span>
+                            </label>
+                            <select
+                              value={mapping.creditDebitIndicator}
+                              onChange={(e) => setMapping({...mapping, creditDebitIndicator: e.target.value})}
+                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                            >
+                              <option value="">Auto-detect from amount sign</option>
+                              {headers.map(h => (
+                                <option key={h} value={h}>{h}</option>
+                              ))}
+                            </select>
+                            <p className="text-xs text-gray-500 mt-1">
+                              If your CSV has a column indicating Credit/Debit, select it here for accurate categorization.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Preview */}
                       {csvData && (
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                           <p className="text-sm text-blue-800">
-                            <strong>Preview:</strong> {csvData.length} transactions found. 
-                            The tool will automatically detect debits (negative amounts or amounts in parentheses) 
-                            and credits (positive amounts).
+                            <strong>Preview:</strong> {csvData.length} rows found in CSV.
+                            {mapping.creditDebitIndicator ? (
+                              <span> Using "{mapping.creditDebitIndicator}" column to determine transaction types.</span>
+                            ) : (
+                              <span> Will auto-detect debits from negative amounts or parentheses.</span>
+                            )}
                           </p>
                         </div>
                       )}
 
+                      {/* Generate Button */}
                       <button
                         onClick={generateQBO}
-                        disabled={!mapping.date || !mapping.description || !mapping.amount || (!bankId || (bankId === 'custom' && !customBankIdValue))}
+                        disabled={!mapping.date || !mapping.description || !mapping.amount || !selectedBank || (selectedBank === 'custom' && (!customBankId || !customRoutingNumber))}
                         className="w-full bg-indigo-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -444,19 +574,22 @@
                   )}
                 </div>
 
+                {/* Instructions */}
                 <div className="mt-6 bg-white rounded-lg shadow-lg p-6">
                   <h2 className="text-lg font-semibold text-gray-800 mb-3">How to use:</h2>
                   <ol className="list-decimal list-inside space-y-2 text-gray-700">
-                    <li>Upload your bank's CSV file using the upload area above</li>
-                    <li>Select your bank from the dropdown (this sets the correct INTU.BID)</li>
-                    <li>Map the CSV columns to the required fields (Date, Description, Amount)</li>
-                    <li>Click "Download QBO File" to generate your QuickBooks import file</li>
-                    <li>In QuickBooks, go to Banking → Upload from File and select your QBO file</li>
+                    <li>Upload your bank's CSV export file</li>
+                    <li>Select your bank from the dropdown (this sets the correct Bank ID and routing number)</li>
+                    <li>Map the CSV columns - especially the <strong>Credit/Debit Indicator</strong> if available</li>
+                    <li>Click "Download QBO File" to generate your QuickBooks-compatible file</li>
+                    <li>In QuickBooks, go to <strong>Banking → Upload from File</strong> and select your QBO file</li>
                   </ol>
-                  <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-                    <p className="text-sm text-gray-600">
-                      <strong>Note:</strong> The Bank ID (INTU.BID) helps QuickBooks correctly identify your financial institution. 
-                      If your bank isn't listed, select "Custom/Other" and enter your bank's routing number or a unique identifier.
+                  
+                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm text-amber-800">
+                      <strong>💡 Important:</strong> For best results, always map the Credit/Debit Indicator column 
+                      if your CSV has one. This ensures debits and credits are categorized correctly. 
+                      Navy Federal CSVs have a "Credit Debit Indicator" column.
                     </p>
                   </div>
                 </div>
