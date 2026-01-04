@@ -3,44 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CSV to QBO Converter</title>
+    <title>CSV to QBO Converter Pro</title>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+      .toggle-switch input { opacity: 0; width: 0; height: 0; }
+      .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .3s; border-radius: 24px; }
+      .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+      input:checked + .toggle-slider { background-color: #4f46e5; }
+      input:checked + .toggle-slider:before { transform: translateX(20px); }
+    </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState } = React;
+        const { useState, useMemo } = React;
 
         function CSVtoQBOConverter() {
+          const [step, setStep] = useState(1);
           const [csvData, setCsvData] = useState(null);
           const [headers, setHeaders] = useState([]);
+          const [fileName, setFileName] = useState('');
+          
+          // Column mapping
           const [mapping, setMapping] = useState({
             date: '',
+            date2: '',
+            payee: '',
             description: '',
             amount: '',
-            creditDebitIndicator: '',
-            type: 'auto'
+            credit: '',
+            debit: '',
+            balance: '',
+            checkNumber: '',
+            refNumber: '',
+            creditDebitIndicator: ''
           });
-          const [accountId, setAccountId] = useState('');
-          const [selectedBank, setSelectedBank] = useState('');
-          const [customBankId, setCustomBankId] = useState('');
-          const [customRoutingNumber, setCustomRoutingNumber] = useState('');
-          const [customOrgName, setCustomOrgName] = useState('');
+          
+          // Configuration
+          const [config, setConfig] = useState({
+            dateFormat: 'MM/DD/YYYY',
+            amountMode: 'single', // 'single' or 'separate'
+            selectedBank: '',
+            customBankId: '',
+            customRouting: '',
+            customOrg: '',
+            accountId: '',
+            accountType: 'CHECKING',
+            currency: 'USD',
+            startBalance: '',
+            endBalance: '',
+            invertAmounts: false
+          });
+          
           const [error, setError] = useState('');
           const [success, setSuccess] = useState('');
           const [loading, setLoading] = useState(false);
 
-          // Bank configurations with correct INTU.BID and routing numbers
+          // Bank configurations
           const bankConfigs = [
             { name: 'Select your bank...', id: '', routing: '', org: '' },
             { name: 'Navy Federal Credit Union', id: '14545', routing: '256074974', org: 'NFCU' },
+            { name: 'Chase (Recommended for unknown banks)', id: '1089', routing: '021000021', org: 'Chase' },
             { name: 'Wells Fargo', id: '3000', routing: '121000248', org: 'Wells Fargo' },
-            { name: 'Chase', id: '1089', routing: '021000021', org: 'Chase' },
             { name: 'Bank of America', id: '5959', routing: '026009593', org: 'Bank of America' },
             { name: 'Citibank', id: '7001', routing: '021000089', org: 'Citibank' },
             { name: 'U.S. Bank', id: '4265', routing: '122105155', org: 'US Bank' },
@@ -53,8 +83,23 @@
             { name: 'Discover Bank', id: '7101', routing: '031100649', org: 'Discover' },
             { name: 'USAA', id: '3912', routing: '314074269', org: 'USAA' },
             { name: 'American Express', id: '3101', routing: '124085066', org: 'American Express' },
-            { name: 'Generic/Universal', id: '3000', routing: '000000000', org: 'Bank' },
             { name: 'Custom/Other', id: 'custom', routing: '', org: '' }
+          ];
+
+          const dateFormats = [
+            { value: 'MM/DD/YYYY', label: 'MM/DD/YYYY (US Standard)' },
+            { value: 'DD/MM/YYYY', label: 'DD/MM/YYYY (International)' },
+            { value: 'YYYY-MM-DD', label: 'YYYY-MM-DD (ISO)' },
+            { value: 'YYYY/MM/DD', label: 'YYYY/MM/DD' },
+            { value: 'M/D/YYYY', label: 'M/D/YYYY (No leading zeros)' },
+            { value: 'D/M/YYYY', label: 'D/M/YYYY (No leading zeros)' }
+          ];
+
+          const accountTypes = [
+            { value: 'CHECKING', label: 'Checking' },
+            { value: 'SAVINGS', label: 'Savings' },
+            { value: 'CREDITCARD', label: 'Credit Card' },
+            { value: 'MONEYMRKT', label: 'Money Market' }
           ];
 
           const handleFileUpload = (e) => {
@@ -64,6 +109,7 @@
             setLoading(true);
             setError('');
             setSuccess('');
+            setFileName(file.name);
 
             Papa.parse(file, {
               header: true,
@@ -77,44 +123,50 @@
                 }
                 
                 const firstRow = results.data[0];
-                if (!firstRow || Object.keys(firstRow).length === 0) {
-                  setError('CSV file has no valid columns');
-                  setLoading(false);
-                  return;
-                }
-                
                 const cleanHeaders = Object.keys(firstRow).map(h => String(h).trim()).filter(h => h);
                 
                 // Auto-detect columns
-                const dateCol = cleanHeaders.find(h => 
-                  /^(posting.?date|date|posted|transaction.?date)$/i.test(h)
-                ) || cleanHeaders.find(h => /date/i.test(h));
+                const findCol = (patterns) => cleanHeaders.find(h => patterns.some(p => p.test(h)));
                 
-                const descCol = cleanHeaders.find(h => 
-                  /^(description|desc|memo|payee|name)$/i.test(h)
-                ) || cleanHeaders.find(h => /desc|memo/i.test(h));
+                const dateCol = findCol([/^posting.?date$/i, /^date$/i, /^transaction.?date$/i]) || 
+                               findCol([/date/i]);
+                const date2Col = findCol([/^transaction.?date$/i]) !== dateCol ? 
+                               findCol([/^transaction.?date$/i]) : '';
+                const payeeCol = findCol([/^payee$/i, /^vendor$/i, /^merchant$/i]);
+                const descCol = findCol([/^description$/i, /^desc$/i, /^memo$/i, /^name$/i]) ||
+                               findCol([/desc|memo/i]);
+                const amountCol = findCol([/^amount$/i, /^value$/i, /^total$/i]);
+                const creditCol = findCol([/^credit$/i, /^credits$/i, /^deposit$/i]);
+                const debitCol = findCol([/^debit$/i, /^debits$/i, /^withdrawal$/i]);
+                const balanceCol = findCol([/^balance$/i, /^running.?balance$/i]);
+                const checkCol = findCol([/^check.?(number|num|no|#)$/i, /^check$/i]);
+                const refCol = findCol([/^ref.?(number|num|no|#)$/i, /^reference$/i]);
+                const indicatorCol = findCol([/credit.?debit|debit.?credit|indicator/i]);
                 
-                const amountCol = cleanHeaders.find(h => 
-                  /^(amount|value|total)$/i.test(h)
-                ) || cleanHeaders.find(h => /amount/i.test(h));
+                // Determine if using separate credit/debit columns
+                const hasSeparateColumns = creditCol && debitCol && !amountCol;
                 
-                // Auto-detect credit/debit indicator column
-                const creditDebitCol = cleanHeaders.find(h => 
-                  /credit.?debit|debit.?credit|indicator|type/i.test(h)
-                );
-                
-                setTimeout(() => {
-                  setHeaders(cleanHeaders);
-                  setCsvData(results.data);
-                  setMapping({
-                    date: dateCol || '',
-                    description: descCol || '',
-                    amount: amountCol || '',
-                    creditDebitIndicator: creditDebitCol || '',
-                    type: 'auto'
-                  });
-                  setLoading(false);
-                }, 0);
+                setHeaders(cleanHeaders);
+                setCsvData(results.data);
+                setMapping({
+                  date: dateCol || '',
+                  date2: date2Col || '',
+                  payee: payeeCol || '',
+                  description: descCol || '',
+                  amount: amountCol || '',
+                  credit: creditCol || '',
+                  debit: debitCol || '',
+                  balance: balanceCol || '',
+                  checkNumber: checkCol || '',
+                  refNumber: refCol || '',
+                  creditDebitIndicator: indicatorCol || ''
+                });
+                setConfig(prev => ({
+                  ...prev,
+                  amountMode: hasSeparateColumns ? 'separate' : 'single'
+                }));
+                setLoading(false);
+                setStep(2);
               },
               error: (err) => {
                 setError(`Error parsing CSV: ${err.message}`);
@@ -125,39 +177,47 @@
 
           const parseDate = (dateStr) => {
             if (!dateStr) return null;
-            
             const cleaned = String(dateStr).trim();
             
-            // Try MM/DD/YYYY format first
-            const mdyMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            if (mdyMatch) {
-              const [, month, day, year] = mdyMatch;
-              return `${year}${month.padStart(2, '0')}${day.padStart(2, '0')}`;
+            let day, month, year;
+            
+            switch (config.dateFormat) {
+              case 'MM/DD/YYYY':
+              case 'M/D/YYYY': {
+                const match = cleaned.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+                if (match) { [, month, day, year] = match; }
+                break;
+              }
+              case 'DD/MM/YYYY':
+              case 'D/M/YYYY': {
+                const match = cleaned.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+                if (match) { [, day, month, year] = match; }
+                break;
+              }
+              case 'YYYY-MM-DD':
+              case 'YYYY/MM/DD': {
+                const match = cleaned.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+                if (match) { [, year, month, day] = match; }
+                break;
+              }
             }
             
-            // Try YYYY-MM-DD format
-            const ymdMatch = cleaned.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-            if (ymdMatch) {
-              const [, year, month, day] = ymdMatch;
-              return `${year}${month.padStart(2, '0')}${day.padStart(2, '0')}`;
+            if (!day || !month || !year) {
+              // Fallback to Date parsing
+              const date = new Date(cleaned);
+              if (isNaN(date.getTime())) return null;
+              year = date.getFullYear();
+              month = date.getMonth() + 1;
+              day = date.getDate();
             }
             
-            // Fallback to Date parsing
-            const date = new Date(cleaned);
-            if (isNaN(date.getTime())) return null;
-            
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            
-            return `${year}${month}${day}`;
+            return `${year}${String(month).padStart(2, '0')}${String(day).padStart(2, '0')}`;
           };
 
           const generateHash = (str) => {
             let hash = 0;
             for (let i = 0; i < str.length; i++) {
-              const char = str.charCodeAt(i);
-              hash = ((hash << 5) - hash) + char;
+              hash = ((hash << 5) - hash) + str.charCodeAt(i);
               hash = hash & hash;
             }
             return Math.abs(hash).toString(16).padStart(32, '0');
@@ -172,20 +232,95 @@
               .replace(/'/g, '&apos;');
           };
 
-          const generateQBO = () => {
-            if (!csvData || !mapping.date || !mapping.description || !mapping.amount) {
-              setError('Please map all required fields (Date, Description, Amount)');
-              return;
-            }
+          // Parse transactions for preview
+          const parsedTransactions = useMemo(() => {
+            if (!csvData) return [];
+            
+            return csvData.map((row, idx) => {
+              const date = parseDate(row[mapping.date]);
+              if (!date) return null;
+              
+              let amount = 0;
+              let isDebit = false;
+              
+              if (config.amountMode === 'separate') {
+                // Separate credit/debit columns
+                const creditVal = parseFloat(String(row[mapping.credit] || '0').replace(/[$,]/g, '')) || 0;
+                const debitVal = parseFloat(String(row[mapping.debit] || '0').replace(/[$,]/g, '')) || 0;
+                
+                if (debitVal > 0) {
+                  amount = debitVal;
+                  isDebit = true;
+                } else {
+                  amount = creditVal;
+                  isDebit = false;
+                }
+              } else {
+                // Single amount column
+                let amountStr = String(row[mapping.amount] || '0').trim().replace(/[$,]/g, '');
+                const hasParens = amountStr.includes('(');
+                const hasMinus = amountStr.startsWith('-');
+                amountStr = amountStr.replace(/[()]/g, '').replace(/^-/, '');
+                amount = parseFloat(amountStr) || 0;
+                
+                // Check indicator column first
+                if (mapping.creditDebitIndicator && row[mapping.creditDebitIndicator]) {
+                  const indicator = String(row[mapping.creditDebitIndicator]).toLowerCase();
+                  isDebit = indicator.includes('debit') || indicator === 'd';
+                } else {
+                  isDebit = hasParens || hasMinus;
+                }
+              }
+              
+              // Apply inversion if enabled
+              if (config.invertAmounts) {
+                isDebit = !isDebit;
+              }
+              
+              const payee = row[mapping.payee] || '';
+              const description = row[mapping.description] || row[mapping.payee] || 'Transaction';
+              const checkNum = row[mapping.checkNumber] || '';
+              const refNum = row[mapping.refNumber] || '';
+              
+              return {
+                idx,
+                date,
+                displayDate: `${date.slice(4,6)}/${date.slice(6,8)}/${date.slice(0,4)}`,
+                payee,
+                description,
+                amount,
+                isDebit,
+                checkNum,
+                refNum,
+                included: true
+              };
+            }).filter(t => t !== null);
+          }, [csvData, mapping, config.amountMode, config.dateFormat, config.invertAmounts]);
 
-            const bankConfig = bankConfigs.find(b => b.id === selectedBank);
+          // Calculate summary
+          const summary = useMemo(() => {
+            const included = parsedTransactions.filter(t => t.included);
+            const credits = included.filter(t => !t.isDebit);
+            const debits = included.filter(t => t.isDebit);
+            
+            return {
+              total: included.length,
+              creditCount: credits.length,
+              debitCount: debits.length,
+              creditSum: credits.reduce((sum, t) => sum + t.amount, 0),
+              debitSum: debits.reduce((sum, t) => sum + t.amount, 0)
+            };
+          }, [parsedTransactions]);
+
+          const generateQBO = () => {
+            const bankConfig = bankConfigs.find(b => b.id === config.selectedBank);
             
             let finalBankId, finalRouting, finalOrg;
             
-            if (selectedBank === 'custom') {
-              finalBankId = customBankId;
-              finalRouting = customRoutingNumber;
-              finalOrg = customOrgName || 'Bank';
+            if (config.selectedBank === 'custom') {
+              finalBankId = config.customBankId;
+              finalRouting = config.customRouting;
+              finalOrg = config.customOrg || 'Bank';
             } else if (bankConfig && bankConfig.id) {
               finalBankId = bankConfig.id;
               finalRouting = bankConfig.routing;
@@ -200,27 +335,25 @@
               return;
             }
 
-            // Collect all valid dates to determine date range
-            const validDates = [];
-            csvData.forEach(row => {
-              const date = parseDate(row[mapping.date]);
-              if (date) validDates.push(date);
-            });
-
-            if (validDates.length === 0) {
-              setError('No valid dates found in the CSV');
+            const transactions = parsedTransactions.filter(t => t.included);
+            if (transactions.length === 0) {
+              setError('No valid transactions to export');
               return;
             }
 
-            // Sort dates to get proper range (earliest to latest)
-            validDates.sort();
-            const startDate = validDates[0];
-            const endDate = validDates[validDates.length - 1];
+            const dates = transactions.map(t => t.date).sort();
+            const startDate = dates[0];
+            const endDate = dates[dates.length - 1];
 
             const now = new Date();
             const dtServer = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.${String(now.getMilliseconds()).padStart(3, '0')}`;
 
-            // Build QBO content
+            const isCreditCard = config.accountType === 'CREDITCARD';
+            const msgType = isCreditCard ? 'CREDITCARDMSGSRSV1' : 'BANKMSGSRSV1';
+            const stmtType = isCreditCard ? 'CCSTMTTRNRS' : 'STMTTRNRS';
+            const stmtRs = isCreditCard ? 'CCSTMTRS' : 'STMTRS';
+            const acctFrom = isCreditCard ? 'CCACCTFROM' : 'BANKACCTFROM';
+
             let qbo = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
             qbo += '<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>';
             qbo += '<OFX>';
@@ -236,362 +369,517 @@
             qbo += `<INTU.BID>${escapeXml(finalBankId)}</INTU.BID>`;
             qbo += '</SONRS>';
             qbo += '</SIGNONMSGSRSV1>';
-            qbo += '<BANKMSGSRSV1>';
-            qbo += '<STMTTRNRS>';
+            qbo += `<${msgType}>`;
+            qbo += `<${stmtType}>`;
             qbo += '<TRNUID>0</TRNUID>';
             qbo += '<STATUS><CODE>0</CODE><SEVERITY>INFO</SEVERITY></STATUS>';
-            qbo += '<STMTRS>';
-            qbo += '<CURDEF>USD</CURDEF>';
-            qbo += '<BANKACCTFROM>';
-            qbo += `<BANKID>${escapeXml(finalRouting)}</BANKID>`;
-            qbo += `<ACCTID>${escapeXml(accountId || '999999999')}</ACCTID>`;
-            qbo += '<ACCTTYPE>CHECKING</ACCTTYPE>';
-            qbo += '</BANKACCTFROM>';
+            qbo += `<${stmtRs}>`;
+            qbo += `<CURDEF>${config.currency}</CURDEF>`;
+            qbo += `<${acctFrom}>`;
+            if (!isCreditCard) {
+              qbo += `<BANKID>${escapeXml(finalRouting)}</BANKID>`;
+            }
+            qbo += `<ACCTID>${escapeXml(config.accountId || '999999999')}</ACCTID>`;
+            if (!isCreditCard) {
+              qbo += `<ACCTTYPE>${config.accountType}</ACCTTYPE>`;
+            }
+            qbo += `</${acctFrom}>`;
             qbo += '<BANKTRANLIST>';
             qbo += `<DTSTART>${startDate}120000.000</DTSTART>`;
             qbo += `<DTEND>${endDate}120000.000</DTEND>`;
 
-            let transactionCount = 0;
-            let creditCount = 0;
-            let debitCount = 0;
-
-            csvData.forEach((row, idx) => {
-              const date = parseDate(row[mapping.date]);
-              if (!date) return;
-              
-              // Parse amount - remove currency symbols and commas
-              let amountStr = String(row[mapping.amount] || '0').trim().replace(/[$,]/g, '');
-              
-              // Check for parentheses or minus sign indicating negative
-              const hasParens = amountStr.includes('(') && amountStr.includes(')');
-              const hasMinus = amountStr.startsWith('-');
-              amountStr = amountStr.replace(/[()]/g, '').replace(/^-/, '');
-              
-              const numAmount = parseFloat(amountStr);
-              if (isNaN(numAmount) || numAmount === 0) return;
-              
-              // Determine if this is a debit or credit
-              let isDebit = false;
-              
-              // First, check the Credit/Debit Indicator column if mapped
-              if (mapping.creditDebitIndicator && row[mapping.creditDebitIndicator]) {
-                const indicator = String(row[mapping.creditDebitIndicator]).trim().toLowerCase();
-                isDebit = indicator.includes('debit') || indicator === 'd';
-              } else if (hasParens || hasMinus) {
-                // Fallback: negative amounts are debits
-                isDebit = true;
-              }
-              
-              const trnType = isDebit ? 'DEBIT' : 'CREDIT';
-              const finalAmount = isDebit ? -Math.abs(numAmount) : Math.abs(numAmount);
-              
-              if (isDebit) debitCount++;
-              else creditCount++;
-              
-              // Get description (truncate to 32 chars for NAME field like Navy Fed does)
-              const fullDesc = String(row[mapping.description] || 'Transaction').trim();
-              const shortName = fullDesc.substring(0, 32);
-              
-              // Generate unique FITID
-              const fitid = generateHash(`${date}${idx}${fullDesc}${numAmount}${Date.now()}`);
+            transactions.forEach((t) => {
+              const trnType = t.isDebit ? 'DEBIT' : 'CREDIT';
+              const finalAmount = t.isDebit ? -Math.abs(t.amount) : Math.abs(t.amount);
+              const shortName = t.description.substring(0, 32);
+              const fitid = generateHash(`${t.date}${t.idx}${t.description}${t.amount}${Date.now()}`);
 
               qbo += '<STMTTRN>';
               qbo += `<TRNTYPE>${trnType}</TRNTYPE>`;
-              qbo += `<DTPOSTED>${date}120000.000</DTPOSTED>`;
+              qbo += `<DTPOSTED>${t.date}120000.000</DTPOSTED>`;
               qbo += `<TRNAMT>${finalAmount.toFixed(2)}</TRNAMT>`;
               qbo += `<FITID>${fitid}</FITID>`;
+              if (t.checkNum) {
+                qbo += `<CHECKNUM>${escapeXml(t.checkNum)}</CHECKNUM>`;
+              }
+              if (t.refNum) {
+                qbo += `<REFNUM>${escapeXml(t.refNum)}</REFNUM>`;
+              }
               qbo += `<NAME>${escapeXml(shortName)}</NAME>`;
-              qbo += `<MEMO>${escapeXml(fullDesc)}</MEMO>`;
+              qbo += `<MEMO>${escapeXml(t.description)}</MEMO>`;
               qbo += '</STMTTRN>';
-              
-              transactionCount++;
             });
 
             qbo += '</BANKTRANLIST>';
+            
+            const ledgerBal = config.endBalance ? parseFloat(config.endBalance) : 0;
             qbo += '<LEDGERBAL>';
-            qbo += '<BALAMT>0.00</BALAMT>';
+            qbo += `<BALAMT>${ledgerBal.toFixed(2)}</BALAMT>`;
             qbo += `<DTASOF>${dtServer}</DTASOF>`;
             qbo += '</LEDGERBAL>';
             qbo += '<AVAILBAL>';
-            qbo += '<BALAMT>0.00</BALAMT>';
+            qbo += `<BALAMT>${ledgerBal.toFixed(2)}</BALAMT>`;
             qbo += `<DTASOF>${dtServer}</DTASOF>`;
             qbo += '</AVAILBAL>';
-            qbo += '</STMTRS>';
-            qbo += '</STMTTRNRS>';
-            qbo += '</BANKMSGSRSV1>';
+            qbo += `</${stmtRs}>`;
+            qbo += `</${stmtType}>`;
+            qbo += `</${msgType}>`;
             qbo += '</OFX>';
 
-            // Download the file
             const blob = new Blob([qbo], { type: 'application/vnd.intu.qbo' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'transactions.qbo';
+            a.download = fileName.replace('.csv', '') + '.qbo';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             
             setError('');
-            setSuccess(`✓ Generated QBO with ${transactionCount} transactions (${creditCount} credits, ${debitCount} debits). Date range: ${startDate} to ${endDate}`);
+            setSuccess(`✓ Downloaded ${transactions.length} transactions (${summary.creditCount} credits: $${summary.creditSum.toFixed(2)}, ${summary.debitCount} debits: $${summary.debitSum.toFixed(2)})`);
           };
 
-          const selectedBankConfig = bankConfigs.find(b => b.id === selectedBank);
+          const ColumnSelect = ({ label, value, onChange, required, hint }) => (
+            <div>
+              <label className="block mb-1 text-sm font-medium text-gray-700">
+                {label} {required && <span className="text-red-500">*</span>}
+              </label>
+              <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+              >
+                <option value="">{required ? 'Select column...' : '(None)'}</option>
+                {headers.map(h => (
+                  <option key={h} value={h}>{h}</option>
+                ))}
+              </select>
+              {hint && <p className="text-xs text-gray-500 mt-1">{hint}</p>}
+            </div>
+          );
 
           return (
-            <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4 md:p-8">
-              <div className="max-w-4xl mx-auto">
-                <div className="bg-white rounded-lg shadow-lg p-6 md:p-8">
-                  <div className="flex items-center gap-3 mb-6">
-                    <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <h1 className="text-2xl md:text-3xl font-bold text-gray-800">CSV to QBO Converter</h1>
-                  </div>
-
-                  {error && (
-                    <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                      <svg className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-100">
+              {/* Header */}
+              <div className="bg-white border-b shadow-sm">
+                <div className="max-w-6xl mx-auto px-4 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-indigo-600 rounded-lg flex items-center justify-center">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
-                      <p className="text-red-800">{error}</p>
                     </div>
-                  )}
-
-                  {success && (
-                    <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
-                      <svg className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      <p className="text-green-800">{success}</p>
-                    </div>
-                  )}
-
-                  {loading && (
-                    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                      <p className="text-blue-800">Processing CSV file...</p>
-                    </div>
-                  )}
-
-                  {/* File Upload */}
-                  <div className="mb-6">
-                    <label className="block mb-2 text-sm font-medium text-gray-700">
-                      1. Upload Bank CSV File
-                    </label>
-                    <div className="flex items-center justify-center w-full">
-                      <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                        <svg className="w-10 h-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                        </svg>
-                        <p className="text-sm text-gray-600">Click to upload CSV file</p>
-                        <input 
-                          type="file" 
-                          className="hidden" 
-                          accept=".csv"
-                          onChange={handleFileUpload}
-                        />
-                      </label>
+                    <div>
+                      <h1 className="text-xl font-bold text-gray-800">CSV to QBO Converter Pro</h1>
+                      <p className="text-sm text-gray-500">Convert bank CSV files to QuickBooks format</p>
                     </div>
                   </div>
+                </div>
+              </div>
 
-                  {headers && headers.length > 0 && (
-                    <div className="space-y-6">
-                      {/* Bank Selection */}
-                      <div className="p-4 bg-gray-50 rounded-lg space-y-4">
-                        <h3 className="font-medium text-gray-800">2. Bank Information</h3>
-                        
-                        <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-700">
-                            Select Your Bank *
-                          </label>
-                          <select
-                            value={selectedBank}
-                            onChange={(e) => setSelectedBank(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                          >
-                            {bankConfigs.map((bank, idx) => (
-                              <option key={idx} value={bank.id}>
-                                {bank.name} {bank.id && bank.id !== 'custom' && `(BID: ${bank.id})`}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {selectedBank === 'custom' && (
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div>
-                              <label className="block mb-1 text-sm text-gray-600">Bank ID (INTU.BID) *</label>
-                              <input
-                                type="text"
-                                placeholder="e.g., 14545"
-                                value={customBankId}
-                                onChange={(e) => setCustomBankId(e.target.value)}
-                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block mb-1 text-sm text-gray-600">Routing Number *</label>
-                              <input
-                                type="text"
-                                placeholder="e.g., 256074974"
-                                value={customRoutingNumber}
-                                onChange={(e) => setCustomRoutingNumber(e.target.value)}
-                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                              />
-                            </div>
-                            <div>
-                              <label className="block mb-1 text-sm text-gray-600">Organization Name</label>
-                              <input
-                                type="text"
-                                placeholder="e.g., NFCU"
-                                value={customOrgName}
-                                onChange={(e) => setCustomOrgName(e.target.value)}
-                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {selectedBankConfig && selectedBankConfig.routing && selectedBank !== 'custom' && (
-                          <div className="text-sm text-gray-600 bg-white p-3 rounded border">
-                            <strong>Bank Details:</strong> BID: {selectedBankConfig.id}, Routing: {selectedBankConfig.routing}, Org: {selectedBankConfig.org}
-                          </div>
-                        )}
-
-                        <div>
-                          <label className="block mb-1 text-sm text-gray-600">Account Number (optional)</label>
-                          <input
-                            type="text"
-                            placeholder="Your account number (or leave blank for default)"
-                            value={accountId}
-                            onChange={(e) => setAccountId(e.target.value)}
-                            className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                          />
-                        </div>
+              {/* Progress Steps */}
+              <div className="max-w-6xl mx-auto px-4 py-4">
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  {[1, 2, 3].map(s => (
+                    <div key={s} className="flex items-center gap-2">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                        step >= s ? 'bg-indigo-600 text-white' : 'bg-gray-200 text-gray-500'
+                      }`}>
+                        {s}
                       </div>
-
-                      {/* Column Mapping */}
-                      <div className="p-4 bg-gray-50 rounded-lg space-y-4">
-                        <h3 className="font-medium text-gray-800">3. Map CSV Columns</h3>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <label className="block mb-2 text-sm font-medium text-gray-700">
-                              Date Column *
-                            </label>
-                            <select
-                              value={mapping.date}
-                              onChange={(e) => setMapping({...mapping, date: e.target.value})}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                            >
-                              <option value="">Select column...</option>
-                              {headers.map(h => (
-                                <option key={h} value={h}>{h}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block mb-2 text-sm font-medium text-gray-700">
-                              Description Column *
-                            </label>
-                            <select
-                              value={mapping.description}
-                              onChange={(e) => setMapping({...mapping, description: e.target.value})}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                            >
-                              <option value="">Select column...</option>
-                              {headers.map(h => (
-                                <option key={h} value={h}>{h}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block mb-2 text-sm font-medium text-gray-700">
-                              Amount Column *
-                            </label>
-                            <select
-                              value={mapping.amount}
-                              onChange={(e) => setMapping({...mapping, amount: e.target.value})}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                            >
-                              <option value="">Select column...</option>
-                              {headers.map(h => (
-                                <option key={h} value={h}>{h}</option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block mb-2 text-sm font-medium text-gray-700">
-                              Credit/Debit Indicator Column
-                              <span className="text-xs text-gray-500 ml-1">(recommended)</span>
-                            </label>
-                            <select
-                              value={mapping.creditDebitIndicator}
-                              onChange={(e) => setMapping({...mapping, creditDebitIndicator: e.target.value})}
-                              className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                            >
-                              <option value="">Auto-detect from amount sign</option>
-                              {headers.map(h => (
-                                <option key={h} value={h}>{h}</option>
-                              ))}
-                            </select>
-                            <p className="text-xs text-gray-500 mt-1">
-                              If your CSV has a column indicating Credit/Debit, select it here for accurate categorization.
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Preview */}
-                      {csvData && (
-                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                          <p className="text-sm text-blue-800">
-                            <strong>Preview:</strong> {csvData.length} rows found in CSV.
-                            {mapping.creditDebitIndicator ? (
-                              <span> Using "{mapping.creditDebitIndicator}" column to determine transaction types.</span>
-                            ) : (
-                              <span> Will auto-detect debits from negative amounts or parentheses.</span>
-                            )}
-                          </p>
-                        </div>
-                      )}
-
-                      {/* Generate Button */}
-                      <button
-                        onClick={generateQBO}
-                        disabled={!mapping.date || !mapping.description || !mapping.amount || !selectedBank || (selectedBank === 'custom' && (!customBankId || !customRoutingNumber))}
-                        className="w-full bg-indigo-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        Download QBO File
-                      </button>
+                      <span className={`text-sm ${step >= s ? 'text-indigo-600 font-medium' : 'text-gray-500'}`}>
+                        {s === 1 ? 'Upload' : s === 2 ? 'Configure' : 'Download'}
+                      </span>
+                      {s < 3 && <div className={`w-12 h-0.5 ${step > s ? 'bg-indigo-600' : 'bg-gray-200'}`} />}
                     </div>
-                  )}
+                  ))}
                 </div>
 
-                {/* Instructions */}
-                <div className="mt-6 bg-white rounded-lg shadow-lg p-6">
-                  <h2 className="text-lg font-semibold text-gray-800 mb-3">How to use:</h2>
-                  <ol className="list-decimal list-inside space-y-2 text-gray-700">
-                    <li>Upload your bank's CSV export file</li>
-                    <li>Select your bank from the dropdown (this sets the correct Bank ID and routing number)</li>
-                    <li>Map the CSV columns - especially the <strong>Credit/Debit Indicator</strong> if available</li>
-                    <li>Click "Download QBO File" to generate your QuickBooks-compatible file</li>
-                    <li>In QuickBooks, go to <strong>Banking → Upload from File</strong> and select your QBO file</li>
-                  </ol>
-                  
-                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                    <p className="text-sm text-amber-800">
-                      <strong>💡 Important:</strong> For best results, always map the Credit/Debit Indicator column 
-                      if your CSV has one. This ensures debits and credits are categorized correctly. 
-                      Navy Federal CSVs have a "Credit Debit Indicator" column.
-                    </p>
+                {/* Alerts */}
+                {error && (
+                  <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
+                    <svg className="w-5 h-5 text-red-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p className="text-red-800">{error}</p>
                   </div>
+                )}
+
+                {success && (
+                  <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-3">
+                    <svg className="w-5 h-5 text-green-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <p className="text-green-800">{success}</p>
+                  </div>
+                )}
+
+                {/* Step 1: Upload */}
+                {step === 1 && (
+                  <div className="bg-white rounded-xl shadow-lg p-8">
+                    <h2 className="text-lg font-semibold mb-4">Upload CSV Bank Transactions</h2>
+                    <label className="flex flex-col items-center justify-center w-full h-48 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-gray-50 transition-colors">
+                      {loading ? (
+                        <div className="text-center">
+                          <div className="animate-spin w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full mx-auto mb-2"></div>
+                          <p className="text-gray-600">Processing...</p>
+                        </div>
+                      ) : (
+                        <>
+                          <svg className="w-12 h-12 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                          <p className="text-gray-600 font-medium">Click to upload or drag and drop</p>
+                          <p className="text-sm text-gray-400 mt-1">CSV files only</p>
+                        </>
+                      )}
+                      <input type="file" className="hidden" accept=".csv" onChange={handleFileUpload} />
+                    </label>
+                  </div>
+                )}
+
+                {/* Step 2: Configure */}
+                {step >= 2 && (
+                  <div className="space-y-6">
+                    {/* File Info */}
+                    <div className="bg-white rounded-xl shadow-lg p-4 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+                          <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-800">{fileName}</p>
+                          <p className="text-sm text-gray-500">{csvData?.length || 0} rows loaded</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => { setStep(1); setCsvData(null); setHeaders([]); }}
+                        className="text-sm text-indigo-600 hover:text-indigo-800"
+                      >
+                        Upload different file
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                      {/* Left Column: Configuration */}
+                      <div className="lg:col-span-1 space-y-6">
+                        {/* Date Format */}
+                        <div className="bg-white rounded-xl shadow-lg p-5">
+                          <h3 className="font-semibold text-gray-800 mb-4">Configuration</h3>
+                          
+                          <div className="space-y-4">
+                            <div>
+                              <label className="block mb-1 text-sm font-medium text-gray-700">Date Format</label>
+                              <select
+                                value={config.dateFormat}
+                                onChange={(e) => setConfig({...config, dateFormat: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                              >
+                                {dateFormats.map(f => (
+                                  <option key={f.value} value={f.value}>{f.label}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block mb-1 text-sm font-medium text-gray-700">Amount Mode</label>
+                              <select
+                                value={config.amountMode}
+                                onChange={(e) => setConfig({...config, amountMode: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                              >
+                                <option value="single">Single Amount Column</option>
+                                <option value="separate">Separate Credit/Debit Columns</option>
+                              </select>
+                            </div>
+
+                            <div className="flex items-center justify-between py-2">
+                              <span className="text-sm text-gray-700">Switch Credits/Debits</span>
+                              <label className="toggle-switch">
+                                <input
+                                  type="checkbox"
+                                  checked={config.invertAmounts}
+                                  onChange={(e) => setConfig({...config, invertAmounts: e.target.checked})}
+                                />
+                                <span className="toggle-slider"></span>
+                              </label>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Bank Selection */}
+                        <div className="bg-white rounded-xl shadow-lg p-5">
+                          <h3 className="font-semibold text-gray-800 mb-4">Bank Information</h3>
+                          
+                          <div className="space-y-4">
+                            <div>
+                              <label className="block mb-1 text-sm font-medium text-gray-700">Bank <span className="text-red-500">*</span></label>
+                              <select
+                                value={config.selectedBank}
+                                onChange={(e) => setConfig({...config, selectedBank: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                              >
+                                {bankConfigs.map((bank, idx) => (
+                                  <option key={idx} value={bank.id}>{bank.name}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {config.selectedBank === 'custom' && (
+                              <>
+                                <input
+                                  type="text"
+                                  placeholder="Bank ID (INTU.BID)"
+                                  value={config.customBankId}
+                                  onChange={(e) => setConfig({...config, customBankId: e.target.value})}
+                                  className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Routing Number"
+                                  value={config.customRouting}
+                                  onChange={(e) => setConfig({...config, customRouting: e.target.value})}
+                                  className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Organization Name"
+                                  value={config.customOrg}
+                                  onChange={(e) => setConfig({...config, customOrg: e.target.value})}
+                                  className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                                />
+                              </>
+                            )}
+
+                            <div>
+                              <label className="block mb-1 text-sm font-medium text-gray-700">Account Type</label>
+                              <select
+                                value={config.accountType}
+                                onChange={(e) => setConfig({...config, accountType: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 text-sm"
+                              >
+                                {accountTypes.map(t => (
+                                  <option key={t.value} value={t.value}>{t.label}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <input
+                              type="text"
+                              placeholder="Account Number (optional)"
+                              value={config.accountId}
+                              onChange={(e) => setConfig({...config, accountId: e.target.value})}
+                              className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                            />
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                placeholder="Start Balance"
+                                value={config.startBalance}
+                                onChange={(e) => setConfig({...config, startBalance: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                              />
+                              <input
+                                type="text"
+                                placeholder="End Balance"
+                                value={config.endBalance}
+                                onChange={(e) => setConfig({...config, endBalance: e.target.value})}
+                                className="w-full p-2 border border-gray-300 rounded-lg text-sm"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right Column: Column Mapping & Preview */}
+                      <div className="lg:col-span-2 space-y-6">
+                        {/* Column Mapping */}
+                        <div className="bg-white rounded-xl shadow-lg p-5">
+                          <h3 className="font-semibold text-gray-800 mb-4">Column Mapping</h3>
+                          
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <ColumnSelect 
+                              label="Date" 
+                              value={mapping.date} 
+                              onChange={(v) => setMapping({...mapping, date: v})}
+                              required
+                            />
+                            <ColumnSelect 
+                              label="Date 2" 
+                              value={mapping.date2} 
+                              onChange={(v) => setMapping({...mapping, date2: v})}
+                              hint="Transaction date (if different)"
+                            />
+                            <ColumnSelect 
+                              label="Payee" 
+                              value={mapping.payee} 
+                              onChange={(v) => setMapping({...mapping, payee: v})}
+                            />
+                            <ColumnSelect 
+                              label="Description" 
+                              value={mapping.description} 
+                              onChange={(v) => setMapping({...mapping, description: v})}
+                              required
+                            />
+                            
+                            {config.amountMode === 'single' ? (
+                              <>
+                                <ColumnSelect 
+                                  label="Amount" 
+                                  value={mapping.amount} 
+                                  onChange={(v) => setMapping({...mapping, amount: v})}
+                                  required
+                                />
+                                <ColumnSelect 
+                                  label="Credit/Debit Indicator" 
+                                  value={mapping.creditDebitIndicator} 
+                                  onChange={(v) => setMapping({...mapping, creditDebitIndicator: v})}
+                                  hint="Column showing Credit/Debit"
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <ColumnSelect 
+                                  label="Credit Amount" 
+                                  value={mapping.credit} 
+                                  onChange={(v) => setMapping({...mapping, credit: v})}
+                                  required
+                                />
+                                <ColumnSelect 
+                                  label="Debit Amount" 
+                                  value={mapping.debit} 
+                                  onChange={(v) => setMapping({...mapping, debit: v})}
+                                  required
+                                />
+                              </>
+                            )}
+                            
+                            <ColumnSelect 
+                              label="Check Number" 
+                              value={mapping.checkNumber} 
+                              onChange={(v) => setMapping({...mapping, checkNumber: v})}
+                            />
+                            <ColumnSelect 
+                              label="Reference Number" 
+                              value={mapping.refNumber} 
+                              onChange={(v) => setMapping({...mapping, refNumber: v})}
+                            />
+                            <ColumnSelect 
+                              label="Balance" 
+                              value={mapping.balance} 
+                              onChange={(v) => setMapping({...mapping, balance: v})}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Summary */}
+                        <div className="bg-white rounded-xl shadow-lg p-5">
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold text-gray-800">Transaction Summary</h3>
+                            <span className="text-sm text-gray-500">{summary.total} transactions</span>
+                          </div>
+                          
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="bg-gray-50 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-gray-800">{summary.total}</p>
+                              <p className="text-xs text-gray-500">Total</p>
+                            </div>
+                            <div className="bg-green-50 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-green-600">{summary.creditCount}</p>
+                              <p className="text-xs text-gray-500">Credits</p>
+                              <p className="text-sm font-medium text-green-600">+${summary.creditSum.toFixed(2)}</p>
+                            </div>
+                            <div className="bg-red-50 rounded-lg p-3 text-center">
+                              <p className="text-2xl font-bold text-red-600">{summary.debitCount}</p>
+                              <p className="text-xs text-gray-500">Debits</p>
+                              <p className="text-sm font-medium text-red-600">-${summary.debitSum.toFixed(2)}</p>
+                            </div>
+                          </div>
+                          
+                          {summary.debitCount === 0 && summary.total > 0 && (
+                            <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                              <p className="text-sm text-amber-800">
+                                ⚠️ No debits detected. Try enabling "Switch Credits/Debits" or check your column mapping.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Preview Table */}
+                        <div className="bg-white rounded-xl shadow-lg p-5">
+                          <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold text-gray-800">Transaction Preview</h3>
+                            <span className="text-xs text-gray-500">Showing first 10 of {parsedTransactions.length}</span>
+                          </div>
+                          
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead>
+                                <tr className="border-b">
+                                  <th className="text-left py-2 px-2 font-medium text-gray-600">Date</th>
+                                  <th className="text-left py-2 px-2 font-medium text-gray-600">Description</th>
+                                  <th className="text-left py-2 px-2 font-medium text-gray-600">Type</th>
+                                  <th className="text-right py-2 px-2 font-medium text-gray-600">Amount</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {parsedTransactions.slice(0, 10).map((t, i) => (
+                                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                                    <td className="py-2 px-2 text-gray-800">{t.displayDate}</td>
+                                    <td className="py-2 px-2 text-gray-800 truncate max-w-xs">{t.description}</td>
+                                    <td className="py-2 px-2">
+                                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                                        t.isDebit ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'
+                                      }`}>
+                                        {t.isDebit ? 'Debit' : 'Credit'}
+                                      </span>
+                                    </td>
+                                    <td className={`py-2 px-2 text-right font-medium ${
+                                      t.isDebit ? 'text-red-600' : 'text-green-600'
+                                    }`}>
+                                      {t.isDebit ? '-' : '+'}${t.amount.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
+                        {/* Download Button */}
+                        <button
+                          onClick={() => { setStep(3); generateQBO(); }}
+                          disabled={!mapping.date || !mapping.description || !config.selectedBank || 
+                            (config.amountMode === 'single' && !mapping.amount) ||
+                            (config.amountMode === 'separate' && (!mapping.credit || !mapping.debit)) ||
+                            (config.selectedBank === 'custom' && (!config.customBankId || !config.customRouting))}
+                          className="w-full bg-indigo-600 text-white py-4 px-6 rounded-xl font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 text-lg shadow-lg"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          Download QBO File
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="max-w-6xl mx-auto px-4 py-8 mt-8">
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="font-semibold text-gray-800 mb-3">Tips for Best Results</h3>
+                  <ul className="text-sm text-gray-600 space-y-2">
+                    <li>• <strong>Date Format:</strong> Make sure to select the correct date format that matches your CSV</li>
+                    <li>• <strong>Credit/Debit:</strong> If all transactions show as credits, use the "Switch Credits/Debits" toggle or map the indicator column</li>
+                    <li>• <strong>Bank Selection:</strong> If your bank isn't listed, try "Chase" as it works with most QuickBooks versions</li>
+                    <li>• <strong>Separate Columns:</strong> If your CSV has separate Credit and Debit amount columns, switch the Amount Mode</li>
+                  </ul>
                 </div>
               </div>
             </div>
