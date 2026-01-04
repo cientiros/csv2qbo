@@ -32,6 +32,7 @@
           const [loading, setLoading] = useState(false);
 
           const commonBanks = [
+            { name: 'Generic/Universal (Recommended - Works with most QB versions)', id: '3000' },
             { name: 'Wells Fargo', id: '3000' },
             { name: 'Chase', id: '1089' },
             { name: 'Bank of America', id: '5959' },
@@ -177,7 +178,7 @@ NEWFILEUID:NONE
 <CURDEF>USD
 <BANKACCTFROM>
 <BANKID>${finalBankId}
-<ACCTID>123456789
+<ACCTID>999999999
 <ACCTTYPE>CHECKING
 </BANKACCTFROM>
 <BANKTRANLIST>
@@ -328,6 +329,10 @@ NEWFILEUID:NONE
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent mt-2"
                           />
                         )}
+                        <p className="text-xs text-gray-500 mt-2">
+                          💡 <strong>Tip:</strong> If you get a "Unable to verify financial institution" error in QuickBooks, 
+                          try using "Generic/Universal (3000)" - it's the most compatible with all QB versions.
+                        </p>
                       </div>
 
                       <div>
