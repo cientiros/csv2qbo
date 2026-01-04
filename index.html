@@ -27,7 +27,9 @@
           });
           const [accountName, setAccountName] = useState('Bank Account');
           const [bankId, setBankId] = useState('');
+          const [customBankIdValue, setCustomBankIdValue] = useState('');
           const [error, setError] = useState('');
+          const [loading, setLoading] = useState(false);
 
           const commonBanks = [
             { name: 'Wells Fargo', id: '3000' },
@@ -49,83 +51,122 @@
           ];
 
           const handleFileUpload = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-
-            Papa.parse(file, {
-              header: true,
-              skipEmptyLines: true,
-              complete: (results) => {
-                if (results.data.length === 0) {
-                  setError('CSV file is empty');
-                  return;
-                }
-                
-                const cleanHeaders = Object.keys(results.data[0]).map(h => h.trim());
-                setHeaders(cleanHeaders);
-                setCsvData(results.data);
-                setError('');
-                
-                const dateCol = cleanHeaders.find(h => 
-                  /date|posted|transaction.*date/i.test(h)
-                );
-                const descCol = cleanHeaders.find(h => 
-                  /desc|description|memo|payee|name/i.test(h)
-                );
-                const amountCol = cleanHeaders.find(h => 
-                  /amount|value|total/i.test(h)
-                );
-                
-                setMapping({
-                  date: dateCol || '',
-                  description: descCol || '',
-                  amount: amountCol || '',
-                  type: 'auto'
-                });
-              },
-              error: (err) => {
-                setError(`Error parsing CSV: ${err.message}`);
+            try {
+              setLoading(true);
+              setError('');
+              
+              const file = e.target.files[0];
+              if (!file) {
+                setLoading(false);
+                return;
               }
-            });
+
+              console.log('File selected:', file.name);
+
+              Papa.parse(file, {
+                header: true,
+                skipEmptyLines: true,
+                dynamicTyping: false,
+                complete: (results) => {
+                  try {
+                    console.log('Parse complete:', results);
+                    
+                    if (!results.data || results.data.length === 0) {
+                      setError('CSV file is empty or could not be parsed');
+                      setLoading(false);
+                      return;
+                    }
+                    
+                    const firstRow = results.data[0];
+                    if (!firstRow || Object.keys(firstRow).length === 0) {
+                      setError('CSV file has no valid columns');
+                      setLoading(false);
+                      return;
+                    }
+                    
+                    const cleanHeaders = Object.keys(firstRow).map(h => String(h).trim()).filter(h => h);
+                    console.log('Headers found:', cleanHeaders);
+                    
+                    setHeaders(cleanHeaders);
+                    setCsvData(results.data);
+                    
+                    const dateCol = cleanHeaders.find(h => 
+                      /date|posted|transaction.*date/i.test(h)
+                    );
+                    const descCol = cleanHeaders.find(h => 
+                      /desc|description|memo|payee|name/i.test(h)
+                    );
+                    const amountCol = cleanHeaders.find(h => 
+                      /amount|value|total/i.test(h)
+                    );
+                    
+                    setMapping({
+                      date: dateCol || '',
+                      description: descCol || '',
+                      amount: amountCol || '',
+                      type: 'auto'
+                    });
+                    
+                    setLoading(false);
+                  } catch (err) {
+                    console.error('Error processing parsed data:', err);
+                    setError('Error processing CSV: ' + err.message);
+                    setLoading(false);
+                  }
+                },
+                error: (err) => {
+                  console.error('Parse error:', err);
+                  setError(`Error parsing CSV: ${err.message}`);
+                  setLoading(false);
+                }
+              });
+            } catch (err) {
+              console.error('Error in handleFileUpload:', err);
+              setError('Error uploading file: ' + err.message);
+              setLoading(false);
+            }
           };
 
           const parseDate = (dateStr) => {
-            const cleaned = dateStr.trim();
-            const date = new Date(cleaned);
-            
-            if (isNaN(date.getTime())) {
+            try {
+              if (!dateStr) return null;
+              
+              const cleaned = String(dateStr).trim();
+              const date = new Date(cleaned);
+              
+              if (isNaN(date.getTime())) {
+                return null;
+              }
+              
+              const year = date.getFullYear();
+              const month = String(date.getMonth() + 1).padStart(2, '0');
+              const day = String(date.getDate()).padStart(2, '0');
+              
+              return `${year}${month}${day}`;
+            } catch (err) {
+              console.error('Error parsing date:', dateStr, err);
               return null;
             }
-            
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            
-            return `${year}${month}${day}`;
           };
 
           const generateQBO = () => {
-            if (!csvData || !mapping.date || !mapping.description || !mapping.amount) {
-              setError('Please map all required fields');
-              return;
-            }
+            try {
+              if (!csvData || !mapping.date || !mapping.description || !mapping.amount) {
+                setError('Please map all required fields');
+                return;
+              }
 
-            if (!bankId) {
-              setError('Please select your bank');
-              return;
-            }
+              const finalBankId = bankId === 'custom' ? customBankIdValue : bankId;
+              
+              if (!finalBankId || finalBankId === 'custom') {
+                setError('Please select a bank or enter a custom Bank ID');
+                return;
+              }
 
-            const finalBankId = bankId === 'custom-value' ? document.getElementById('customBankId').value : bankId;
-            
-            if (!finalBankId || finalBankId === 'custom') {
-              setError('Please enter a custom Bank ID');
-              return;
-            }
-
-            const today = new Date();
-            const dtServer = today.toISOString().replace(/[-:]/g, '').split('.')[0];
-            
-            let qboContent = `OFXHEADER:100
+              const today = new Date();
+              const dtServer = today.toISOString().replace(/[-:]/g, '').split('.')[0];
+              
+              let qboContent = `OFXHEADER:100
 DATA:OFXSGML
 VERSION:102
 SECURITY:NONE
@@ -165,39 +206,41 @@ NEWFILEUID:NONE
 <DTEND>${parseDate(csvData[csvData.length - 1][mapping.date]) || dtServer.substring(0, 8)}
 `;
 
-            csvData.forEach((row, idx) => {
-              const date = parseDate(row[mapping.date]);
-              if (!date) return;
-              
-              let amount = String(row[mapping.amount] || '0')
-                .trim()
-                .replace(/[$,]/g, '');
-              
-              const isNegative = amount.includes('(') || amount.startsWith('-');
-              amount = amount.replace(/[()]/g, '').replace(/-/g, '');
-              const numAmount = parseFloat(amount);
-              
-              if (isNaN(numAmount)) return;
-              
-              let finalAmount = numAmount;
-              let trnType = 'OTHER';
-              
-              if (mapping.type === 'auto') {
-                if (isNegative || numAmount < 0) {
-                  finalAmount = Math.abs(numAmount);
-                  trnType = 'DEBIT';
-                } else {
-                  trnType = 'CREDIT';
-                }
-              }
-              
-              const description = (row[mapping.description] || 'Transaction')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .substring(0, 255);
+              let transactionCount = 0;
+              csvData.forEach((row, idx) => {
+                try {
+                  const date = parseDate(row[mapping.date]);
+                  if (!date) return;
+                  
+                  let amount = String(row[mapping.amount] || '0')
+                    .trim()
+                    .replace(/[$,]/g, '');
+                  
+                  const isNegative = amount.includes('(') || amount.startsWith('-');
+                  amount = amount.replace(/[()]/g, '').replace(/-/g, '');
+                  const numAmount = parseFloat(amount);
+                  
+                  if (isNaN(numAmount)) return;
+                  
+                  let finalAmount = numAmount;
+                  let trnType = 'OTHER';
+                  
+                  if (mapping.type === 'auto') {
+                    if (isNegative || numAmount < 0) {
+                      finalAmount = Math.abs(numAmount);
+                      trnType = 'DEBIT';
+                    } else {
+                      trnType = 'CREDIT';
+                    }
+                  }
+                  
+                  const description = String(row[mapping.description] || 'Transaction')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .substring(0, 255);
 
-              qboContent += `<STMTTRN>
+                  qboContent += `<STMTTRN>
 <TRNTYPE>${trnType}
 <DTPOSTED>${date}
 <TRNAMT>${trnType === 'DEBIT' ? '-' : ''}${finalAmount.toFixed(2)}
@@ -206,9 +249,13 @@ NEWFILEUID:NONE
 <MEMO>${description}
 </STMTTRN>
 `;
-            });
+                  transactionCount++;
+                } catch (err) {
+                  console.error('Error processing row:', idx, err);
+                }
+              });
 
-            qboContent += `</BANKTRANLIST>
+              qboContent += `</BANKTRANLIST>
 <LEDGERBAL>
 <BALAMT>0.00
 <DTASOF>${dtServer.substring(0, 8)}
@@ -218,54 +265,48 @@ NEWFILEUID:NONE
 </BANKMSGSRSV1>
 </OFX>`;
 
-            const blob = new Blob([qboContent], { type: 'application/x-qbo' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'transactions.qbo';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+              console.log('Generated QBO with', transactionCount, 'transactions');
+
+              const blob = new Blob([qboContent], { type: 'application/x-qbo' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = 'transactions.qbo';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              
+              setError('');
+            } catch (err) {
+              console.error('Error generating QBO:', err);
+              setError('Error generating QBO file: ' + err.message);
+            }
           };
-
-          const UploadIcon = () => (
-            <svg className="w-10 h-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-            </svg>
-          );
-
-          const DownloadIcon = () => (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-          );
-
-          const FileTextIcon = () => (
-            <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-          );
-
-          const AlertIcon = () => (
-            <svg className="w-5 h-5 text-red-600 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          );
 
           return (
             <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
               <div className="max-w-4xl mx-auto">
                 <div className="bg-white rounded-lg shadow-lg p-8">
                   <div className="flex items-center gap-3 mb-6">
-                    <FileTextIcon />
+                    <svg className="w-8 h-8 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
                     <h1 className="text-3xl font-bold text-gray-800">CSV to QBO Converter</h1>
                   </div>
 
                   {error && (
                     <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3">
-                      <AlertIcon />
+                      <svg className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
                       <p className="text-red-800">{error}</p>
+                    </div>
+                  )}
+
+                  {loading && (
+                    <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-blue-800">Processing CSV file...</p>
                     </div>
                   )}
 
@@ -275,7 +316,9 @@ NEWFILEUID:NONE
                     </label>
                     <div className="flex items-center justify-center w-full">
                       <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
-                        <UploadIcon />
+                        <svg className="w-10 h-10 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
                         <p className="text-sm text-gray-600">Click to upload CSV file</p>
                         <input 
                           type="file" 
@@ -307,16 +350,10 @@ NEWFILEUID:NONE
                         </select>
                         {bankId === 'custom' && (
                           <input
-                            id="customBankId"
                             type="text"
                             placeholder="Enter Bank ID (e.g., 1234)"
-                            onChange={(e) => {
-                              if (e.target.value) {
-                                setBankId('custom-value');
-                              } else {
-                                setBankId('custom');
-                              }
-                            }}
+                            value={customBankIdValue}
+                            onChange={(e) => setCustomBankIdValue(e.target.value)}
                             className="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent mt-2"
                           />
                         )}
@@ -395,10 +432,12 @@ NEWFILEUID:NONE
 
                       <button
                         onClick={generateQBO}
-                        disabled={!mapping.date || !mapping.description || !mapping.amount || !bankId || bankId === 'custom'}
+                        disabled={!mapping.date || !mapping.description || !mapping.amount || (!bankId || bankId === 'custom' && !customBankIdValue)}
                         className="w-full bg-indigo-600 text-white py-3 px-6 rounded-lg font-medium hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                       >
-                        <DownloadIcon />
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
                         Download QBO File
                       </button>
                     </div>
