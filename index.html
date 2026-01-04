@@ -92,7 +92,6 @@
                   /amount|value|total/i.test(h)
                 );
                 
-                // Update all state at once using a timeout to ensure proper batching
                 setTimeout(() => {
                   setHeaders(cleanHeaders);
                   setCsvData(results.data);
@@ -130,6 +129,16 @@
             return `${year}${month}${day}`;
           };
 
+          const generateHash = (str) => {
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) {
+              const char = str.charCodeAt(i);
+              hash = ((hash << 5) - hash) + char;
+              hash = hash & hash;
+            }
+            return Math.abs(hash).toString(16).padStart(32, '0');
+          };
+
           const generateQBO = () => {
             if (!csvData || !mapping.date || !mapping.description || !mapping.amount) {
               setError('Please map all required fields');
@@ -144,47 +153,54 @@
             }
 
             const today = new Date();
-            const dtServer = today.toISOString().replace(/[-:]/g, '').split('.')[0];
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            const hours = String(today.getHours()).padStart(2, '0');
+            const minutes = String(today.getMinutes()).padStart(2, '0');
+            const seconds = String(today.getSeconds()).padStart(2, '0');
+            const millis = String(today.getMilliseconds()).padStart(3, '0');
+            const dtServer = `${year}${month}${day}${hours}${minutes}${seconds}.${millis}`;
             
-            let qboContent = `OFXHEADER:100
-DATA:OFXSGML
-VERSION:102
-SECURITY:NONE
-ENCODING:USASCII
-CHARSET:1252
-COMPRESSION:NONE
-OLDFILEUID:NONE
-NEWFILEUID:NONE
-
-<OFX>
-<SIGNONMSGSRSV1>
-<SONRS>
-<STATUS>
-<CODE>0
-<SEVERITY>INFO
-</STATUS>
-<DTSERVER>${dtServer}
-<LANGUAGE>ENG
-</SONRS>
-</SIGNONMSGSRSV1>
-<BANKMSGSRSV1>
-<STMTTRNRS>
-<TRNUID>1
-<STATUS>
-<CODE>0
-<SEVERITY>INFO
-</STATUS>
-<STMTRS>
-<CURDEF>USD
-<BANKACCTFROM>
-<BANKID>${finalBankId}
-<ACCTID>999999999
-<ACCTTYPE>CHECKING
-</BANKACCTFROM>
-<BANKTRANLIST>
-<DTSTART>${parseDate(csvData[0][mapping.date]) || '20240101'}
-<DTEND>${parseDate(csvData[csvData.length - 1][mapping.date]) || dtServer.substring(0, 8)}
-`;
+            let qboContent = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+            qboContent += '<?OFX OFXHEADER="200" VERSION="220" SECURITY="NONE" OLDFILEUID="NONE" NEWFILEUID="NONE"?>';
+            qboContent += '<OFX>';
+            qboContent += '<SIGNONMSGSRSV1>';
+            qboContent += '<SONRS>';
+            qboContent += '<STATUS>';
+            qboContent += '<CODE>0</CODE>';
+            qboContent += '<SEVERITY>INFO</SEVERITY>';
+            qboContent += '</STATUS>';
+            qboContent += `<DTSERVER>${dtServer}</DTSERVER>`;
+            qboContent += '<LANGUAGE>ENG</LANGUAGE>';
+            qboContent += '<FI>';
+            qboContent += '<ORG>Bank</ORG>';
+            qboContent += '<FID>1001</FID>';
+            qboContent += '</FI>';
+            qboContent += `<INTU.BID>${finalBankId}</INTU.BID>`;
+            qboContent += '</SONRS>';
+            qboContent += '</SIGNONMSGSRSV1>';
+            qboContent += '<BANKMSGSRSV1>';
+            qboContent += '<STMTTRNRS>';
+            qboContent += '<TRNUID>0</TRNUID>';
+            qboContent += '<STATUS>';
+            qboContent += '<CODE>0</CODE>';
+            qboContent += '<SEVERITY>INFO</SEVERITY>';
+            qboContent += '</STATUS>';
+            qboContent += '<STMTRS>';
+            qboContent += '<CURDEF>USD</CURDEF>';
+            qboContent += '<BANKACCTFROM>';
+            qboContent += `<BANKID>${finalBankId}</BANKID>`;
+            qboContent += '<ACCTID>999999999</ACCTID>';
+            qboContent += '<ACCTTYPE>CHECKING</ACCTTYPE>';
+            qboContent += '</BANKACCTFROM>';
+            qboContent += '<BANKTRANLIST>';
+            
+            const firstDate = parseDate(csvData[0][mapping.date]) || '20240101';
+            const lastDate = parseDate(csvData[csvData.length - 1][mapping.date]) || year + month + day;
+            
+            qboContent += `<DTSTART>${firstDate}120000.000</DTSTART>`;
+            qboContent += `<DTEND>${lastDate}120000.000</DTEND>`;
 
             let transactionCount = 0;
             csvData.forEach((row, idx) => {
@@ -218,32 +234,38 @@ NEWFILEUID:NONE
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
                 .substring(0, 255);
+              
+              const fitid = generateHash(date + idx + description + finalAmount);
 
-              qboContent += `<STMTTRN>
-<TRNTYPE>${trnType}
-<DTPOSTED>${date}
-<TRNAMT>${trnType === 'DEBIT' ? '-' : ''}${finalAmount.toFixed(2)}
-<FITID>${date}${idx}
-<NAME>${description}
-<MEMO>${description}
-</STMTTRN>
-`;
+              qboContent += '<STMTTRN>';
+              qboContent += `<TRNTYPE>${trnType}</TRNTYPE>`;
+              qboContent += `<DTPOSTED>${date}120000.000</DTPOSTED>`;
+              qboContent += `<TRNAMT>${trnType === 'DEBIT' ? '-' : ''}${finalAmount.toFixed(2)}</TRNAMT>`;
+              qboContent += `<FITID>${fitid}</FITID>`;
+              qboContent += `<NAME>${description}</NAME>`;
+              qboContent += `<MEMO>${description}</MEMO>`;
+              qboContent += '</STMTTRN>';
+              
               transactionCount++;
             });
 
-            qboContent += `</BANKTRANLIST>
-<LEDGERBAL>
-<BALAMT>0.00
-<DTASOF>${dtServer.substring(0, 8)}
-</LEDGERBAL>
-</STMTRS>
-</STMTTRNRS>
-</BANKMSGSRSV1>
-</OFX>`;
+            qboContent += '</BANKTRANLIST>';
+            qboContent += '<LEDGERBAL>';
+            qboContent += '<BALAMT>0.00</BALAMT>';
+            qboContent += `<DTASOF>${dtServer}</DTASOF>`;
+            qboContent += '</LEDGERBAL>';
+            qboContent += '<AVAILBAL>';
+            qboContent += '<BALAMT>0.00</BALAMT>';
+            qboContent += `<DTASOF>${dtServer}</DTASOF>`;
+            qboContent += '</AVAILBAL>';
+            qboContent += '</STMTRS>';
+            qboContent += '</STMTTRNRS>';
+            qboContent += '</BANKMSGSRSV1>';
+            qboContent += '</OFX>';
 
             console.log('Generated QBO with', transactionCount, 'transactions');
 
-            const blob = new Blob([qboContent], { type: 'application/x-qbo' });
+            const blob = new Blob([qboContent], { type: 'application/vnd.intu.qbo' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
