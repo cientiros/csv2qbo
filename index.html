@@ -23,6 +23,7 @@
             date: '',
             description: '',
             amount: '',
+            transactionType: '',
             type: 'auto'
           });
           const [accountName, setAccountName] = useState('Bank Account');
@@ -92,6 +93,9 @@
                 const amountCol = cleanHeaders.find(h => 
                   /amount|value|total/i.test(h)
                 );
+                const typeCol = cleanHeaders.find(h =>
+                  /credit.*debit.*indicator|debit.*credit|type/i.test(h)
+                );
                 
                 setTimeout(() => {
                   setHeaders(cleanHeaders);
@@ -100,6 +104,7 @@
                     date: dateCol || '',
                     description: descCol || '',
                     amount: amountCol || '',
+                    transactionType: typeCol || '',
                     type: 'auto'
                   });
                   setLoading(false);
@@ -216,16 +221,28 @@
               amount = amount.replace(/[()]/g, '').replace(/-/g, '');
               const numAmount = parseFloat(amount);
               
-              if (isNaN(numAmount)) return;
+              if (isNaN(numAmount) || numAmount === 0) return;
               
               let finalAmount = numAmount;
               let trnType = 'OTHER';
               
-              if (mapping.type === 'auto') {
-                if (isNegative || numAmount < 0) {
+              // Check if there's a transaction type column
+              if (mapping.transactionType && row[mapping.transactionType]) {
+                const typeValue = String(row[mapping.transactionType]).trim().toLowerCase();
+                if (typeValue === 'debit') {
+                  trnType = 'DEBIT';
+                  finalAmount = -Math.abs(numAmount);
+                } else if (typeValue === 'credit') {
+                  trnType = 'CREDIT';
                   finalAmount = Math.abs(numAmount);
+                }
+              } else {
+                // Fall back to auto-detection based on amount
+                if (isNegative || numAmount < 0) {
+                  finalAmount = -Math.abs(numAmount);
                   trnType = 'DEBIT';
                 } else {
+                  finalAmount = Math.abs(numAmount);
                   trnType = 'CREDIT';
                 }
               }
@@ -241,7 +258,7 @@
               qboContent += '<STMTTRN>';
               qboContent += `<TRNTYPE>${trnType}</TRNTYPE>`;
               qboContent += `<DTPOSTED>${date}120000.000</DTPOSTED>`;
-              qboContent += `<TRNAMT>${trnType === 'DEBIT' ? '-' : ''}${finalAmount.toFixed(2)}</TRNAMT>`;
+              qboContent += `<TRNAMT>${finalAmount.toFixed(2)}</TRNAMT>`;
               qboContent += `<FITID>${fitid}</FITID>`;
               qboContent += `<NAME>${description}</NAME>`;
               qboContent += `<MEMO>${description}</MEMO>`;
@@ -442,8 +459,8 @@
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                           <p className="text-sm text-blue-800">
                             <strong>Preview:</strong> {csvData.length} transactions found. 
-                            The tool will automatically detect debits (negative amounts or amounts in parentheses) 
-                            and credits (positive amounts).
+                            {mapping.transactionType && ` Using "${mapping.transactionType}" column to detect debits and credits.`}
+                            {!mapping.transactionType && ' Will automatically detect debits (negative amounts or amounts in parentheses) and credits (positive amounts).'}
                           </p>
                         </div>
                       )}
