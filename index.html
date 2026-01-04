@@ -93,9 +93,14 @@
                 const amountCol = cleanHeaders.find(h => 
                   /amount|value|total/i.test(h)
                 );
-                const typeCol = cleanHeaders.find(h =>
-                  /credit.*debit.*indicator|debit.*credit|type/i.test(h)
-                );
+                const typeCol = cleanHeaders.find(h => {
+                  const lower = h.toLowerCase();
+                  return (lower.includes('credit') && lower.includes('debit')) || 
+                         lower === 'type' || 
+                         lower.includes('indicator');
+                });
+                
+                console.log('Transaction type column detected:', typeCol);
                 
                 setTimeout(() => {
                   setHeaders(cleanHeaders);
@@ -229,12 +234,23 @@
               // Check if there's a transaction type column
               if (mapping.transactionType && row[mapping.transactionType]) {
                 const typeValue = String(row[mapping.transactionType]).trim().toLowerCase();
-                if (typeValue === 'debit') {
+                console.log('Row', idx, 'Type:', typeValue, 'Amount:', numAmount);
+                
+                if (typeValue.includes('debit')) {
                   trnType = 'DEBIT';
                   finalAmount = -Math.abs(numAmount);
-                } else if (typeValue === 'credit') {
+                } else if (typeValue.includes('credit')) {
                   trnType = 'CREDIT';
                   finalAmount = Math.abs(numAmount);
+                } else {
+                  // If type column exists but value is unclear, fall back to amount detection
+                  if (isNegative || numAmount < 0) {
+                    finalAmount = -Math.abs(numAmount);
+                    trnType = 'DEBIT';
+                  } else {
+                    finalAmount = Math.abs(numAmount);
+                    trnType = 'CREDIT';
+                  }
                 }
               } else {
                 // Fall back to auto-detection based on amount
